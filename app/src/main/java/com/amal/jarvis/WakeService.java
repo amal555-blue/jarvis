@@ -74,7 +74,7 @@ public class WakeService extends Service {
   showPopup("You: "+raw+"\nThinking…");
   String result=Commands.run(this,raw);
   if(result!=null){if(result.equals("__STOP__")){stopSelf();return;}speak(result,ticket);return;}
-  new Thread(()->{String answer;try{answer=AiClient.ask(this,raw,history);}catch(Exception e){answer="AI connection failed. Check your AI settings and service credit.";}final String reply=answer;ui.post(()->{if(running&&ticket==generation&&Session.valid(this))speak(reply,ticket);else finishReply(ticket);});},"jarvis-answer").start();
+  new Thread(()->{String answer;try{answer=AiClient.ask(this,raw,history);}catch(Exception e){answer=AiClient.failureMessage(this,e);}final String reply=answer;ui.post(()->{if(running&&ticket==generation&&Session.valid(this))speak(reply,ticket);else finishReply(ticket);});},"jarvis-answer").start();
  }
  void speak(String text,int ticket){
   if(ticket!=generation||!running)return;showPopup(text);if(hud!=null)hud.label="SPEAKING";notice("Speaking — listening resumes afterwards");
