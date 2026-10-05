@@ -20,6 +20,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Bundle offline English speech model
+        run: |
+          mkdir -p app/src/main/assets
+          curl --fail --location --retry 3 https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip -o app/src/main/assets/voice-model.zip
+          unzip -t app/src/main/assets/voice-model.zip
       - run: gradle assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
