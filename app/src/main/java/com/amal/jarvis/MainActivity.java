@@ -18,46 +18,66 @@ import java.util.*;
 
 public class MainActivity extends FragmentActivity {
  TextView status; EditText input; LinearLayout controls; SpeechRecognizer recognizer; TextToSpeech voice;
- boolean unlocked=false, ready=false; BiometricPrompt prompt;
+ boolean unlocked=false, ready=false, busy=false, foreground=false; BiometricPrompt prompt;
+ HudView hud; TextView chat; org.json.JSONArray history=new org.json.JSONArray();
+ java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
+ void pauseWake(){if(WakeService.instance!=null)WakeService.instance.pause();}
+ void resumeWake(){if(WakeService.instance!=null&&Session.valid(this))WakeService.instance.resume();}
+
  @Override public void onCreate(Bundle state) {
   super.onCreate(state); getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-  LinearLayout root=new LinearLayout(this); root.setOrientation(1); root.setPadding(32,64,32,32); root.setBackgroundColor(Color.rgb(5,12,20));
-  TextView title=new TextView(this); title.setText("J A R V I S"); title.setTextColor(Color.CYAN); title.setTextSize(32); root.addView(title);
+  LinearLayout root=new LinearLayout(this); root.setOrientation(1); root.setPadding(24,28,24,24); root.setBackgroundColor(Color.rgb(5,12,20));
+  TextView title=new TextView(this); title.setText("J A R V I S"); title.setTextColor(Color.CYAN); title.setTextSize(22); root.addView(title);
+ hud=new HudView(this);root.addView(hud,new LinearLayout.LayoutParams(-1,(int)(260*getResources().getDisplayMetrics().density)));
   status=new TextView(this); status.setTextColor(Color.WHITE); status.setTextSize(18); status.setPadding(0,32,0,32); root.addView(status);
   button(root,"Unlock assistant",this::authenticate);
   controls=new LinearLayout(this); controls.setOrientation(1); root.addView(controls);
   input=new EditText(this); input.setTextColor(Color.WHITE); input.setHintTextColor(Color.GRAY); input.setHint("Try: open WhatsApp / alarm 06:30 / time"); controls.addView(input);
   button(controls,"Run command",()->run(input.getText().toString()));
   button(controls,"Speak",this::listen);
+  button(controls,"AI & voice setup",this::setup);
+  button(controls,"Enroll my voice",this::enroll);
+  button(controls,"Start Jarvis wake word",this::startWake);
+  button(controls,"Stop voice session",()->{stopService(new Intent(this,WakeService.class));Session.unlocked=false;unlocked=false;Session.unlocked=false;refresh();});
+  chat=new TextView(this);chat.setTextColor(Color.rgb(150,210,225));chat.setTextSize(16);chat.setTextIsSelectable(true);controls.addView(chat);
   button(controls,"Enable floating bubble",()->{
    if(!Settings.canDrawOverlays(this)){startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getPackageName())));say("Allow display over other apps, then tap this button again.");return;}
    if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},8);
    startForegroundService(new Intent(this,BubbleService.class));say("Floating bubble enabled. Tap it to open Jarvis.");
   });
   button(controls,"Stop floating bubble",()->stopService(new Intent(this,BubbleService.class)));
-  button(controls,"Lock",()->{unlocked=false;refresh();});
-  setContentView(root); refresh();
-  voice=new TextToSpeech(this,result->{ready=result==TextToSpeech.SUCCESS;if(ready)voice.setLanguage(Locale.ENGLISH);});
+  button(controls,"Lock",()->{unlocked=false;Session.unlocked=false;refresh();});
+  ScrollView scroll=new ScrollView(this);scroll.addView(root);setContentView(scroll);unlocked=Session.valid(this);refresh();
+  voice=new TextToSpeech(this,result->{ready=result==TextToSpeech.SUCCESS;if(ready)voice.setLanguage(Locale.ENGLISH);
+  voice.setOnUtteranceProgressListener(new android.speech.tts.UtteranceProgressListener(){public void onStart(String id){}public void onDone(String id){runOnUiThread(()->{hud.label="J.A.R.V.I.S";resumeWake();});}public void onError(String id){runOnUiThread(()->resumeWake());}});});
  }
  void button(LinearLayout parent,String label,Runnable action){Button b=new Button(this); b.setText(label); parent.addView(b); b.setOnClickListener(v->action.run());}
  void refresh(){controls.setVisibility(unlocked?View.VISIBLE:View.GONE);status.setText(unlocked?"Ready. Tap Speak or type a command.":"Locked. Use your phone's supported biometric or screen-lock credential.");}
  void authenticate(){
   prompt=new BiometricPrompt(this, r->runOnUiThread(r),new BiometricPrompt.AuthenticationCallback(){
-   @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result){unlocked=true;refresh();}
-   @Override public void onAuthenticationError(int code,CharSequence error){unlocked=false;refresh();status.setText(error);}
+   @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result){unlocked=true;Session.unlocked=true;refresh();}
+   @Override public void onAuthenticationError(int code,CharSequence error){unlocked=false;Session.unlocked=false;refresh();status.setText(error);}
   });
   try {prompt.authenticate(new BiometricPrompt.PromptInfo.Builder().setTitle("Unlock JARVIS").setSubtitle("Android verifies your identity").setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK | androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL).build());}
   catch(Exception e){status.setText("Set up a phone screen lock or biometric in Android settings first.");}
  }
- void say(String text){status.setText(text);if(ready)voice.speak(text,TextToSpeech.QUEUE_FLUSH,null,"jarvis");}
+ void say(String text){if(!Session.valid(this))return;status.setText(text);chat.append("\nJARVIS: "+text+"\n");pauseWake();hud.label="SPEAKING";if(ready){int result=voice.speak(text.substring(0,Math.min(text.length(),3500)),TextToSpeech.QUEUE_FLUSH,null,"jarvis");if(result==TextToSpeech.ERROR)resumeWake();}else resumeWake();}
  void listen(){
+  if(!Session.valid(this)||busy)return;
+  if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},7);return;}
+  pauseWake();if(voice!=null)voice.stop();
+  if(Vault.get(this,"profile").isEmpty()){listenRaw();return;}
+  busy=true;status.setText("Voice check: say ‘Jarvis, this is Amal speaking’ for three seconds.");hud.label="VERIFY VOICE";
+  worker.execute(()->{try{boolean match=VoiceProfile.verify(this);runOnUiThread(()->{busy=false;if(!foreground||!Session.valid(this))return;if(match)listenRaw();else say("Voice not matched. Please try again in a quiet place.");});}catch(Exception e){runOnUiThread(()->{busy=false;say("Voice check failed. Check your Picovoice key or re-enroll.");});}});
+ }
+ void listenRaw(){
   if(!unlocked)return;
   if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},7);say("Grant microphone permission, then tap Speak again.");return;}
   if(!SpeechRecognizer.isRecognitionAvailable(this)){say("Install or enable a speech recognition service, or type your command.");return;}
   if(ready)voice.stop();
   if(recognizer!=null)recognizer.destroy(); recognizer=SpeechRecognizer.createSpeechRecognizer(this);
   recognizer.setRecognitionListener(new RecognitionListener(){
-   public void onReadyForSpeech(Bundle b){status.setText("Listening…");} public void onBeginningOfSpeech(){} public void onRmsChanged(float f){} public void onBufferReceived(byte[] b){} public void onEndOfSpeech(){} public void onPartialResults(Bundle b){} public void onEvent(int e,Bundle b){}
+   public void onReadyForSpeech(Bundle b){status.setText("Listening… Speak your command now.");hud.label="LISTENING";} public void onBeginningOfSpeech(){} public void onRmsChanged(float f){hud.energy=Math.max(0,f);} public void onBufferReceived(byte[] b){} public void onEndOfSpeech(){} public void onPartialResults(Bundle b){} public void onEvent(int e,Bundle b){}
    public void onError(int error){say("Speech recognition stopped ("+error+"). Tap Speak to retry.");}
    public void onResults(Bundle b){ArrayList<String> list=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);if(unlocked&&list!=null&&!list.isEmpty()){input.setText(list.get(0));run(list.get(0));}}
   });
@@ -65,12 +85,13 @@ public class MainActivity extends FragmentActivity {
  }
  void launch(Intent intent){try{startActivity(intent);}catch(Exception e){say("No installed app can handle this action.");}}
  void run(String raw){
-  if(!unlocked)return;
+  if(!unlocked||!Session.valid(this)||busy)return;
+  chat.append("\nYOU: "+raw+"\n");
   String cmd=raw.trim().toLowerCase(Locale.ROOT).replaceFirst("^jarvis[, ]*","");
   if(cmd.equals("time")){say(java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new Date()));}
   else if(cmd.equals("date")){say(java.text.DateFormat.getDateInstance().format(new Date()));}
   else if(cmd.equals("settings")){launch(new Intent(Settings.ACTION_SETTINGS));}
-  else if(cmd.equals("lock")){unlocked=false;refresh();}
+  else if(cmd.equals("lock")){unlocked=false;Session.unlocked=false;refresh();}
   else if(cmd.startsWith("search ")){launch(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/search?q="+Uri.encode(cmd.substring(7)))));}
   else if(cmd.matches("alarm \\d{1,2}:\\d{2}")){
    String[] t=cmd.substring(6).split(":");int h=Integer.parseInt(t[0]),m=Integer.parseInt(t[1]);
@@ -83,8 +104,35 @@ public class MainActivity extends FragmentActivity {
    String[] labels=new String[matches.size()];for(int i=0;i<labels.length;i++)labels[i]=matches.get(i).loadLabel(getPackageManager())+" ("+matches.get(i).activityInfo.packageName+")";
    if(matches.size()==1){ResolveInfo r=matches.get(0);launch(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(new ComponentName(r.activityInfo.packageName,r.activityInfo.name)));}
    else new AlertDialog.Builder(this).setTitle("Choose app").setItems(labels,(d,i)->{ResolveInfo r=matches.get(i);launch(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(new ComponentName(r.activityInfo.packageName,r.activityInfo.name)));}).show();
-  }else say("Version 0.1 supports: open app name, alarm HH:MM, time, date, settings, search topic, and lock. Cloud AI is not connected yet.");
+  }else {busy=true;pauseWake();hud.label="THINKING";status.setText("Thinking…");worker.execute(()->{String answer;try{answer=AiClient.ask(this,raw,history);}catch(Exception e){answer="AI connection failed. Check your endpoint, model, API key and service credit.";}String reply=answer;runOnUiThread(()->{busy=false;if(Session.valid(this)&&foreground)say(reply);else resumeWake();});});}
  }
- @Override protected void onStop(){super.onStop();unlocked=false;if(controls!=null)refresh();if(recognizer!=null)recognizer.cancel();if(voice!=null)voice.stop();}
- @Override protected void onDestroy(){if(prompt!=null)prompt.cancelAuthentication();if(recognizer!=null)recognizer.destroy();if(voice!=null)voice.shutdown();super.onDestroy();}
+ @Override protected void onResume(){super.onResume();foreground=true;unlocked=Session.valid(this);refresh();if(unlocked&&WakeService.pendingWake){WakeService.pendingWake=false;if(WakeService.instance!=null)WakeService.instance.removePopup();new Handler().postDelayed(this::listen,250);}}
+ @Override protected void onNewIntent(Intent i){super.onNewIntent(i);setIntent(i);if(Session.valid(this)&&WakeService.pendingWake){WakeService.pendingWake=false;if(WakeService.instance!=null)WakeService.instance.removePopup();listen();}}
+ @Override protected void onStop(){super.onStop();foreground=false;VoiceProfile.cancel=true;if(recognizer!=null)recognizer.cancel();if(voice!=null)voice.stop();if(!busy)resumeWake();}
+ @Override protected void onDestroy(){VoiceProfile.cancel=true;if(prompt!=null)prompt.cancelAuthentication();if(recognizer!=null)recognizer.destroy();if(voice!=null)voice.shutdown();worker.shutdownNow();super.onDestroy();}
+ void startWake(){
+  if(!Session.valid(this))return;
+  if(Vault.get(this,"pico").isEmpty()){say("Add a Picovoice AccessKey in setup first.");return;}
+  if(Vault.get(this,"profile").isEmpty()){say("Enroll your voice before enabling wake word.");return;}
+  if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},7);return;}
+  if(!Settings.canDrawOverlays(this)){startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getPackageName())));return;}
+  if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},8);return;}
+  if(voice!=null)voice.stop();startForegroundService(new Intent(this,WakeService.class));status.setText("Say Jarvis. Then complete the voice check and speak your command. Stops when the screen locks.");
+ }
+ void enroll(){
+  if(!Session.valid(this)||busy)return;
+  if(Vault.get(this,"pico").isEmpty()){say("Add your Picovoice key first.");return;}
+  if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},7);return;}
+  pauseWake();if(voice!=null)voice.stop();busy=true;status.setText("Read several sentences naturally in a quiet room. Your voice profile stays on this phone.");
+  worker.execute(()->{try{VoiceProfile.enroll(this,t->runOnUiThread(()->status.setText(t)));}catch(Exception e){runOnUiThread(()->status.setText("Enrollment stopped. Check key, device support, and microphone; then retry."));}finally{runOnUiThread(()->{busy=false;resumeWake();});}});
+ }
+ EditText field(LinearLayout box,String hint,String key,boolean secret){EditText e=new EditText(this);e.setHint(hint);e.setSingleLine(true);if(secret)e.setInputType(129);e.setText(Vault.get(this,key));box.addView(e);return e;}
+ void setup(){
+  if(!Session.valid(this)||busy)return;pauseWake();
+  LinearLayout box=new LinearLayout(this);box.setOrientation(1);box.setPadding(24,12,24,12);
+  TextView help=new TextView(this);help.setText("AI uses your own compatible chat-completions service. Questions go to that HTTPS endpoint; service charges may apply. Keys are encrypted on this phone. Picovoice enables wake word and speaker enrollment. Voice matching is not replay-proof.");box.addView(help);
+  EditText endpoint=field(box,"Full HTTPS chat/completions URL","endpoint",false),model=field(box,"Model ID from your AI provider","model",false),token=field(box,"AI API key","token",true),pico=field(box,"Picovoice AccessKey","pico",true);
+  ScrollView scroll=new ScrollView(this);scroll.addView(box);
+  new AlertDialog.Builder(this).setTitle("AI & voice setup").setView(scroll).setPositiveButton("Save",(d,w)->{try{String url=endpoint.getText().toString().trim();if(!url.isEmpty()&&!url.startsWith("https://")){say("Use an HTTPS endpoint.");return;}Vault.put(this,"endpoint",url);Vault.put(this,"model",model.getText().toString().trim());Vault.put(this,"token",token.getText().toString().trim());Vault.put(this,"pico",pico.getText().toString().trim());say("Settings saved. Enroll your voice, then start Jarvis wake word.");}catch(Exception e){say("Could not save securely.");}}).setNegativeButton("Cancel",(d,w)->resumeWake()).setNeutralButton("Delete voice profile",(d,w)->{try{Vault.put(this,"profile","");stopService(new Intent(this,WakeService.class));say("Voice profile deleted. Wake word stopped.");}catch(Exception e){}}).show();
+ }
 }

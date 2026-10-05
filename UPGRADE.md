@@ -1,0 +1,14 @@
+# JARVIS 0.2
+
+Animated Canvas HUD inspired by the supplied circular cyan reference; typed chat with short in-memory AI context; encrypted provider settings using Android Keystore; Android biometric session lasts until screen off, explicit lock/stop, or process death.
+
+## Setup
+Unlock the app. Open AI & voice setup. Supply a full HTTPS OpenAI-compatible chat-completions endpoint, model ID and your personal service API key. No model or paid account is bundled. Keys are encrypted at rest and excluded from Android backup. This personal-use client sends the key only to the endpoint you configure, does not follow redirects, and sends questions/history to that service. A production multi-user release should use an authenticated backend instead. ChatGPT subscriptions do not provide this app with an API key.
+
+For voice: obtain a Picovoice AccessKey from https://console.picovoice.ai/ and enter it in the app, never in GitHub or chat. Enroll in a quiet room by reading natural sentences until 100%. Start Jarvis wake word after granting microphone, notifications and overlay permissions. Wake monitoring uses Porcupine on-device, not continuous cloud speech recognition. SDK license validation needs connectivity and account entitlement. Say Jarvis; the animated popup opens the app; say a short identity phrase for three seconds for Eagle speaker matching, then speak the command when prompted. Each new spoken command requires a voice check once a profile exists. This is probabilistic speaker screening, not secure proof of identity or anti-replay authentication. A person can still trigger the wake animation; voice commands are gated afterward. Raw enrollment audio is not persisted; encrypted voice profile stays on device and can be deleted in setup. Speech-to-text uses the Android speech provider and may send command audio off-device.
+
+Wake word runs only during an authenticated, screen-on session. Screen off stops it; reopen, unlock once and start it again. A foreground microphone notification includes Stop. Android/Vivo background restrictions may require tapping that notification if automatic opening is denied. These device behaviors need physical testing.
+
+Supported phone commands remain open APP, alarm HH:MM, time, date, settings, search TOPIC and lock. Other questions use configured AI; AI responses never execute arbitrary phone actions. Calls/messages/accessibility automation and full unrestricted phone control are not implemented.
+
+This is a debug APK. CI runners may use different signing keys: if Android refuses to update the original 0.1, uninstall it before installing 0.2 (clears app settings). Future production updates need a stable private signing key. Hardware voice recognition, enrollment quality and provider calls cannot be verified without the user's device and credentials.
