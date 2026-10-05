@@ -38,7 +38,7 @@ public class MainActivity extends FragmentActivity {
   button(controls,"AI & voice setup",this::setup);
   button(controls,"Enroll my voice",this::enroll);
   button(controls,"Start Jarvis wake word",this::startWake);
-  button(controls,"Stop voice session",()->{stopService(new Intent(this,WakeService.class));Session.unlocked=false;unlocked=false;Session.unlocked=false;refresh();});
+  button(controls,"Stop voice session",()->{stopService(new Intent(this,WakeService.class));Session.unlocked=false;unlocked=false;Session.unlocked=false;stopService(new Intent(this,WakeService.class));refresh();});
   chat=new TextView(this);chat.setTextColor(Color.rgb(150,210,225));chat.setTextSize(16);chat.setTextIsSelectable(true);controls.addView(chat);
   button(controls,"Enable floating bubble",()->{
    if(!Settings.canDrawOverlays(this)){startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getPackageName())));say("Allow display over other apps, then tap this button again.");return;}
@@ -46,7 +46,7 @@ public class MainActivity extends FragmentActivity {
    startForegroundService(new Intent(this,BubbleService.class));say("Floating bubble enabled. Tap it to open Jarvis.");
   });
   button(controls,"Stop floating bubble",()->stopService(new Intent(this,BubbleService.class)));
-  button(controls,"Lock",()->{unlocked=false;Session.unlocked=false;refresh();});
+  button(controls,"Lock",()->{unlocked=false;Session.unlocked=false;stopService(new Intent(this,WakeService.class));refresh();});
   ScrollView scroll=new ScrollView(this);scroll.addView(root);setContentView(scroll);unlocked=Session.valid(this);refresh();
   voice=new TextToSpeech(this,result->{ready=result==TextToSpeech.SUCCESS;if(ready)voice.setLanguage(Locale.ENGLISH);
   voice.setOnUtteranceProgressListener(new android.speech.tts.UtteranceProgressListener(){public void onStart(String id){}public void onDone(String id){runOnUiThread(()->{hud.label="J.A.R.V.I.S";resumeWake();});}public void onError(String id){runOnUiThread(()->resumeWake());}});});
@@ -56,7 +56,7 @@ public class MainActivity extends FragmentActivity {
  void authenticate(){
   prompt=new BiometricPrompt(this, r->runOnUiThread(r),new BiometricPrompt.AuthenticationCallback(){
    @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result){unlocked=true;Session.unlocked=true;refresh();}
-   @Override public void onAuthenticationError(int code,CharSequence error){unlocked=false;Session.unlocked=false;refresh();status.setText(error);}
+   @Override public void onAuthenticationError(int code,CharSequence error){unlocked=false;Session.unlocked=false;stopService(new Intent(MainActivity.this,WakeService.class));refresh();status.setText(error);}
   });
   try {prompt.authenticate(new BiometricPrompt.PromptInfo.Builder().setTitle("Unlock JARVIS").setSubtitle("Android verifies your identity").setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK | androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL).build());}
   catch(Exception e){status.setText("Set up a phone screen lock or biometric in Android settings first.");}
@@ -68,7 +68,7 @@ public class MainActivity extends FragmentActivity {
   pauseWake();if(voice!=null)voice.stop();
   if(Vault.get(this,"profile").isEmpty()){listenRaw();return;}
   busy=true;status.setText("Voice check: say ‘Jarvis, this is Amal speaking’ for three seconds.");hud.label="VERIFY VOICE";
-  worker.execute(()->{try{boolean match=VoiceProfile.verify(this);runOnUiThread(()->{busy=false;if(!foreground||!Session.valid(this))return;if(match)listenRaw();else say("Voice not matched. Please try again in a quiet place.");});}catch(Exception e){runOnUiThread(()->{busy=false;say("Voice check failed. Check your Picovoice key or re-enroll.");});}});
+  worker.execute(()->{try{boolean match=VoiceProfile.verify(this);runOnUiThread(()->{busy=false;if(!foreground||!Session.valid(this)){resumeWake();return;}if(match)listenRaw();else say("Voice not matched. Please try again in a quiet place.");});}catch(Exception e){runOnUiThread(()->{busy=false;say("Voice check failed. Check your Picovoice key or re-enroll.");});}});
  }
  void listenRaw(){
   if(!unlocked)return;
@@ -78,7 +78,7 @@ public class MainActivity extends FragmentActivity {
   if(recognizer!=null)recognizer.destroy(); recognizer=SpeechRecognizer.createSpeechRecognizer(this);
   recognizer.setRecognitionListener(new RecognitionListener(){
    public void onReadyForSpeech(Bundle b){status.setText("Listening… Speak your command now.");hud.label="LISTENING";} public void onBeginningOfSpeech(){} public void onRmsChanged(float f){hud.energy=Math.max(0,f);} public void onBufferReceived(byte[] b){} public void onEndOfSpeech(){} public void onPartialResults(Bundle b){} public void onEvent(int e,Bundle b){}
-   public void onError(int error){say("Speech recognition stopped ("+error+"). Tap Speak to retry.");}
+   public void onError(int error){if(!foreground)return;say("Speech recognition stopped ("+error+"). Tap Speak to retry.");}
    public void onResults(Bundle b){ArrayList<String> list=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);if(unlocked&&list!=null&&!list.isEmpty()){input.setText(list.get(0));run(list.get(0));}}
   });
   Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"en-IN");recognizer.startListening(intent);
@@ -91,7 +91,7 @@ public class MainActivity extends FragmentActivity {
   if(cmd.equals("time")){say(java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new Date()));}
   else if(cmd.equals("date")){say(java.text.DateFormat.getDateInstance().format(new Date()));}
   else if(cmd.equals("settings")){launch(new Intent(Settings.ACTION_SETTINGS));}
-  else if(cmd.equals("lock")){unlocked=false;Session.unlocked=false;refresh();}
+  else if(cmd.equals("lock")){unlocked=false;Session.unlocked=false;stopService(new Intent(this,WakeService.class));refresh();}
   else if(cmd.startsWith("search ")){launch(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/search?q="+Uri.encode(cmd.substring(7)))));}
   else if(cmd.matches("alarm \\d{1,2}:\\d{2}")){
    String[] t=cmd.substring(6).split(":");int h=Integer.parseInt(t[0]),m=Integer.parseInt(t[1]);
